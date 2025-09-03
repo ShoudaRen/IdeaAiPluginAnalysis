@@ -35,6 +35,8 @@ public class PromptManager {
      * 根据检查内容动态选择相关的规范片段
      */
     public String buildSmartPrompt(MethodCallChain callChain, List<String> violationTypes) {
+
+        //todo
         StringBuilder prompt = new StringBuilder();
         
         // 1. 基础提示词

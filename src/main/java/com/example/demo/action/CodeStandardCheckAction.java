@@ -57,7 +57,7 @@ public class CodeStandardCheckAction extends AnAction {
             return;
         }
         
-        // 使用进度管理器执行检查
+        // 使用进度管理器执行检查   
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "云开发规范检查", true) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
