@@ -48,8 +48,8 @@ public class CallChainAnalyzer {
     public MethodCallChain analyzeCallChain(String methodName, String className) {
         MethodCallChain callChain = new MethodCallChain();
         analyzedMethods.clear();
-        // 解析包过滤配置
-        PackageFilter filter = PackageFilter.fromConfig();
+        // 解析包过滤配置，自动推断项目根包
+        PackageFilter filter = PackageFilter.fromConfig(project, className);
         
         // 检查是否在IntelliJ环境中运行
         if (project == null) {
@@ -139,7 +139,7 @@ public class CallChainAnalyzer {
     }
 
     /**
-     * 判断方法是否属于Controller层
+     * 判断方法是否属于适配器层(Adapter) - 原Controller层
      */
     private boolean isControllerMethod(PsiMethod psiMethod) {
         PsiClass containingClass = psiMethod.getContainingClass();
@@ -154,11 +154,17 @@ public class CallChainAnalyzer {
             }
         }
 
-        // 通过类名/包名识别
+        // 通过类名/包名识别适配器层
         String className = containingClass.getName();
-        PsiPackage psiPackage = JavaPsiFacade.getInstance(project).findPackage(containingClass.getQualifiedName());
-        String packageName = psiPackage != null ? psiPackage.getQualifiedName() : "";
-        return (className != null && className.endsWith("Controller")) || packageName.contains(".controller");
+        String qualifiedName = containingClass.getQualifiedName();
+        if (qualifiedName == null) return false;
+        
+        String lowerClassName = className.toLowerCase();
+        String lowerQualifiedName = qualifiedName.toLowerCase();
+        
+        return lowerClassName.endsWith("controller") || lowerClassName.contains("adapter") || 
+               lowerClassName.contains("web") || lowerClassName.contains("rest") ||
+               lowerQualifiedName.contains(".controller") || lowerQualifiedName.contains(".adapter");
     }
     
     /**
@@ -217,25 +223,49 @@ public class CallChainAnalyzer {
     }
     
     /**
-     * 推断方法的层次类型
+     * 推断方法的层次类型（基于云开发范式4层架构）
      */
     private String inferLayerType(PsiMethod psiMethod) {
         PsiClass containingClass = psiMethod.getContainingClass();
         if (containingClass == null) return "UNKNOWN";
         
         String className = containingClass.getName();
-        // 获取包名
-        PsiPackage psiPackage = JavaPsiFacade.getInstance(project).findPackage(containingClass.getQualifiedName());
-        String packageName = psiPackage != null ? psiPackage.getQualifiedName() : "";
+        String qualifiedName = containingClass.getQualifiedName();
+        if (qualifiedName == null) return "UNKNOWN";
         
-        // 根据类名和包名推断层次
-        if (className.endsWith("Controller") || packageName.contains(".controller")) {
-            return "CONTROLLER";
-        } else if (className.endsWith("Service") || packageName.contains(".service")) {
-            return "SERVICE";
-        } else if (className.endsWith("Repository") || className.endsWith("Dao") || 
-                   packageName.contains(".repository") || packageName.contains(".dao")) {
-            return "REPOSITORY";
+        String lowerClassName = className.toLowerCase();
+        String lowerQualifiedName = qualifiedName.toLowerCase();
+        
+        // 适配器层 (Adapter) - Web控制器、定时任务适配器、消息适配器等
+        if (lowerClassName.endsWith("controller") || lowerClassName.contains("adapter") || 
+            lowerClassName.contains("web") || lowerClassName.contains("rest") ||
+            lowerQualifiedName.contains(".controller") || lowerQualifiedName.contains(".adapter")) {
+            return "ADAPTER";
+        }
+        
+        // 应用层 (Application) - 应用逻辑编排，包含api和service分包
+        if ((lowerClassName.endsWith("service") && !lowerClassName.contains("impl")) ||
+            lowerClassName.contains("application") || lowerClassName.contains("api") ||
+            lowerQualifiedName.contains(".service") || lowerQualifiedName.contains(".application")) {
+            return "APPLICATION";
+        }
+        
+        // 领域层 (Domain) - 实体、值对象、领域服务等
+        if (lowerClassName.contains("domain") || lowerClassName.contains("entity") ||
+            lowerClassName.contains("model") || lowerClassName.contains("aggregate") ||
+            lowerClassName.contains("valueobject") || lowerClassName.contains("vo") ||
+            lowerQualifiedName.contains(".domain") || lowerQualifiedName.contains(".entity")) {
+            return "DOMAIN";
+        }
+        
+        // 基础设施层 (Infrastructure) - 工具类、全局通用类、接口实现
+        if (lowerClassName.contains("impl") || lowerClassName.endsWith("mapper") ||
+            lowerClassName.endsWith("repository") || lowerClassName.endsWith("dao") ||
+            lowerClassName.contains("infrastructure") || lowerClassName.contains("config") ||
+            lowerClassName.contains("util") || lowerClassName.contains("common") ||
+            lowerQualifiedName.contains(".infrastructure") || lowerQualifiedName.contains(".mapper") ||
+            lowerQualifiedName.contains(".repository") || lowerQualifiedName.contains(".dao")) {
+            return "INFRASTRUCTURE";
         }
         
         return "UNKNOWN";
@@ -296,13 +326,101 @@ public class CallChainAnalyzer {
             this.excludes = excludes;
         }
 
-        static PackageFilter fromConfig() {
+        static PackageFilter fromConfig(Project project, String targetClassName) {
             com.example.demo.util.ConfigManager cfg = com.example.demo.util.ConfigManager.getInstance();
             String inc = cfg.getProperty("analyze.include.packages", "");
             String exc = cfg.getProperty("analyze.exclude.packages", "java.,javax.,jakarta.,jdk.,sun.,kotlin.,org.springframework.,org.jetbrains.,com.intellij.,com.fasterxml.,com.google.,org.apache.,org.slf4j.,ch.qos.logback.,org.hibernate.,org.mybatis.,org.junit.,org.testng.");
+            
             List<String> includes = toList(inc);
             List<String> excludes = toList(exc);
+            
+            // 如果没有配置include包，自动推断项目根包
+            if (includes.isEmpty()) {
+                String rootPackage = inferProjectRootPackage(project, targetClassName);
+                if (rootPackage != null && !rootPackage.isEmpty()) {
+                    includes.add(rootPackage + ".");
+                }
+            }
+            
             return new PackageFilter(includes, excludes);
+        }
+        
+        /**
+         * 自动推断项目根包名
+         */
+        private static String inferProjectRootPackage(Project project, String targetClassName) {
+            if (project == null || targetClassName == null) return null;
+            
+            // 方法1: 从目标类名推断
+            if (targetClassName.contains(".")) {
+                String[] parts = targetClassName.split("\\.");
+                if (parts.length >= 3) {
+                    // 通常项目根包是前2-3段，如 com.easysplit 或 com.company.project
+                    if (parts.length >= 3 && isCommonTopDomain(parts[0])) {
+                        return parts[0] + "." + parts[1]; // com.easysplit
+                    }
+                }
+            }
+            
+            // 方法2: 扫描项目中的常见包结构
+            try {
+                return ApplicationManager.getApplication().runReadAction((com.intellij.openapi.util.Computable<String>) () -> {
+                    return scanProjectForRootPackage(project);
+                });
+            } catch (Exception e) {
+                // 扫描失败，返回null
+            }
+            
+            return null;
+        }
+        
+        /**
+         * 判断是否是常见的顶级域名
+         */
+        private static boolean isCommonTopDomain(String domain) {
+            return domain.equals("com") || domain.equals("org") || domain.equals("net") || 
+                   domain.equals("cn") || domain.equals("io") || domain.equals("cc");
+        }
+        
+        /**
+         * 扫描项目寻找根包
+         */
+        private static String scanProjectForRootPackage(Project project) {
+            try {
+                // 查找项目中的Controller类，通常能代表项目包结构
+                GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
+                PsiClass[] controllers = JavaPsiFacade.getInstance(project)
+                    .findClasses("*Controller", scope);
+                
+                if (controllers.length > 0) {
+                    String qualifiedName = controllers[0].getQualifiedName();
+                    if (qualifiedName != null && qualifiedName.contains(".")) {
+                        String[] parts = qualifiedName.split("\\.");
+                        if (parts.length >= 3 && isCommonTopDomain(parts[0])) {
+                            return parts[0] + "." + parts[1]; // com.easysplit
+                        }
+                    }
+                }
+                
+                // 如果没找到Controller，查找Service类
+                PsiClass[] services = JavaPsiFacade.getInstance(project)
+                    .findClasses("*Service", scope);
+                
+                if (services.length > 0) {
+                    String qualifiedName = services[0].getQualifiedName();
+                    if (qualifiedName != null && qualifiedName.contains(".")) {
+                        String[] parts = qualifiedName.split("\\.");
+                        if (parts.length >= 3 && isCommonTopDomain(parts[0])) {
+                            return parts[0] + "." + parts[1];
+                        }
+                    }
+                }
+                
+            } catch (Exception e) {
+                // 扫描失败
+            }
+            
+            return null;
         }
 
         private static List<String> toList(String csv) {

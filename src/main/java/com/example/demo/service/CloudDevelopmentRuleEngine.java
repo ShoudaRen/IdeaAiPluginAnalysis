@@ -196,29 +196,132 @@ public class CloudDevelopmentRuleEngine {
     }
     
     /**
-     * 检查层次调用模式
+     * 检查层次调用模式（基于云开发范式4层架构）
      */
     private List<RuleViolation> checkLayerCallPattern(MethodCallChain callChain) {
         List<RuleViolation> violations = new ArrayList<>();
         
-        // 检查是否存在跨层调用（如Controller直接调用DAO）
+        // 构建调用关系图
+        Map<String, Set<String>> callGraph = buildCallGraph(callChain);
+        
+        // 检查层间依赖规则
         for (MethodInfo method : callChain.getAllMethods()) {
-            if ("CONTROLLER".equals(method.getLayerType())) {
-                // 检查Controller是否直接调用DAO层
-                for (MethodInfo calledMethod : callChain.getAllMethods()) {
-                    if ("DAO".equals(calledMethod.getLayerType())) {
-                        violations.add(new RuleViolation(
-                            "LAYER_VIOLATION",
-                            "控制层直接调用数据访问层",
-                            method.getMethodSignature() + " -> " + calledMethod.getMethodSignature(),
-                            "控制层应该通过服务层调用数据访问层",
-                            "high"
-                        ));
-                    }
+            String callerLayer = method.getLayerType();
+            String callerSignature = method.getMethodSignature();
+            
+            // 获取该方法直接调用的其他方法
+            Set<String> directCalls = callGraph.get(callerSignature);
+            if (directCalls == null) continue;
+            
+            for (String calledSignature : directCalls) {
+                MethodInfo calledMethod = findMethodBySignature(callChain, calledSignature);
+                if (calledMethod == null) continue;
+                
+                String calleeLayer = calledMethod.getLayerType();
+                
+                // 检查违规的层间调用
+                String violationMessage = checkLayerDependency(callerLayer, calleeLayer);
+                if (violationMessage != null) {
+                    violations.add(new RuleViolation(
+                        "LAYER_VIOLATION",
+                        violationMessage,
+                        callerSignature + " -> " + calledSignature,
+                        getLayerDependencyAdvice(callerLayer, calleeLayer),
+                        "high"
+                    ));
                 }
             }
         }
         
         return violations;
+    }
+    
+    /**
+     * 构建调用关系图
+     */
+    private Map<String, Set<String>> buildCallGraph(MethodCallChain callChain) {
+        Map<String, Set<String>> graph = new HashMap<>();
+        
+        // 根据调用深度构建调用关系
+        Map<Integer, List<MethodInfo>> callsByDepth = callChain.getCallsByDepth();
+        
+        for (int depth = 0; depth < callChain.getMaxDepth(); depth++) {
+            List<MethodInfo> currentLevel = callsByDepth.get(depth);
+            List<MethodInfo> nextLevel = callsByDepth.get(depth + 1);
+            
+            if (currentLevel != null && nextLevel != null) {
+                for (MethodInfo caller : currentLevel) {
+                    String callerSignature = caller.getMethodSignature();
+                    Set<String> calls = graph.computeIfAbsent(callerSignature, k -> new HashSet<>());
+                    
+                    for (MethodInfo callee : nextLevel) {
+                        calls.add(callee.getMethodSignature());
+                    }
+                }
+            }
+        }
+        
+        return graph;
+    }
+    
+    /**
+     * 根据方法签名查找方法信息
+     */
+    private MethodInfo findMethodBySignature(MethodCallChain callChain, String signature) {
+        for (MethodInfo method : callChain.getAllMethods()) {
+            if (signature.equals(method.getMethodSignature())) {
+                return method;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * 检查层间依赖是否合规
+     * 返回违规描述，null表示合规
+     */
+    private String checkLayerDependency(String callerLayer, String calleeLayer) {
+        // 云开发范式4层架构依赖规则：
+        // 1. 适配器层 -> 应用层
+        // 2. 应用层 -> 领域层
+        // 3. 基础设施层 -> 领域层
+        // 4. 所有层都可以依赖基础设施层的工具类和通用类
+        
+        if ("ADAPTER".equals(callerLayer)) {
+            if (!"APPLICATION".equals(calleeLayer) && !"INFRASTRUCTURE".equals(calleeLayer)) {
+                return "适配器层违规调用：适配器层只能调用应用层或基础设施层的工具类";
+            }
+        } else if ("APPLICATION".equals(callerLayer)) {
+            if (!"DOMAIN".equals(calleeLayer) && !"INFRASTRUCTURE".equals(calleeLayer)) {
+                return "应用层违规调用：应用层只能调用领域层或基础设施层";
+            }
+        } else if ("DOMAIN".equals(callerLayer)) {
+            if ("ADAPTER".equals(calleeLayer) || "APPLICATION".equals(calleeLayer)) {
+                return "领域层违规调用：领域层不能调用适配器层或应用层";
+            }
+        } else if ("INFRASTRUCTURE".equals(callerLayer)) {
+            if ("ADAPTER".equals(calleeLayer) || "APPLICATION".equals(calleeLayer)) {
+                return "基础设施层违规调用：基础设施层不能调用适配器层或应用层";
+            }
+        }
+        
+        return null; // 合规
+    }
+    
+    /**
+     * 获取层间依赖建议
+     */
+    private String getLayerDependencyAdvice(String callerLayer, String calleeLayer) {
+        if ("ADAPTER".equals(callerLayer)) {
+            return "适配器层应该调用应用层进行业务编排，通过应用层间接访问其他层";
+        } else if ("APPLICATION".equals(callerLayer)) {
+            return "应用层应该调用领域层处理核心业务逻辑，通过领域层的support接口访问基础设施层";
+        } else if ("DOMAIN".equals(callerLayer)) {
+            return "领域层应该通过support接口定义依赖，由基础设施层实现具体功能";
+        } else if ("INFRASTRUCTURE".equals(callerLayer)) {
+            return "基础设施层应该实现领域层定义的support接口，不应该主动调用上层";
+        }
+        
+        return "请遵循云开发范式的层间依赖规则";
     }
 }

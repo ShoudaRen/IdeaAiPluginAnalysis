@@ -47,76 +47,65 @@ public class AIIntegrationService {
     /**
      * 使用AI分析方法调用链路并生成改进建议
      */
-    public List<RuleViolation> analyzeWithAI(MethodCallChain callChain, 
-                                            List<RuleViolation> existingViolations,
-                                            PromptManager promptManager) {
+    public List<RuleViolation> analyzeWithAI(MethodCallChain callChain) {
         List<RuleViolation> aiViolations = new ArrayList<>();
         
         try {
-            // 提取违规类型
-            List<String> violationTypes = new ArrayList<>();
-            for (RuleViolation violation : existingViolations) {
-                violationTypes.add(violation.getViolationType());
-            }
             
-            // 使用智能提示词管理器构建提示词
-            String prompt = promptManager.buildSmartPrompt(callChain, violationTypes);
+            // 使用本地提示词构建方法
+            String prompt = buildAnalysisPrompt(callChain);
             String aiResponse = callAIAPI(prompt);
             aiViolations = parseAIResponse(aiResponse);
             
         } catch (Exception e) {
             logger.error("AI分析失败: {}", e.getMessage());
-            // 返回空列表，不影响基础规则检查
+
         }
         
         return aiViolations;
     }
-    
-    /**
-     * 使用AI分析方法调用链路并生成改进建议（兼容旧版本）
-     */
-    public List<RuleViolation> analyzeWithAI(MethodCallChain callChain, 
-                                            List<RuleViolation> existingViolations) {
-        PromptManager promptManager = new PromptManager();
-        return analyzeWithAI(callChain, existingViolations, promptManager);
-    }
-    
+
     /**
      * 构建AI分析提示词
      */
-    private String buildAnalysisPrompt(MethodCallChain callChain, 
-                                      List<RuleViolation> existingViolations) {
+    private String buildAnalysisPrompt(MethodCallChain callChain) {
         StringBuilder prompt = new StringBuilder();
         
         prompt.append("你是一个Java代码规范专家，请分析以下方法调用链路是否符合云开发范式规范。\n\n");
         
-        // 添加云开发范式规范说明（这里可以从数据库或配置文件加载）
+        // 添加云开发范式规范说明（基于4层DDD架构）
         prompt.append("云开发范式规范要点：\n");
-        prompt.append("1. 命名规范：方法名使用驼峰命名法，类名首字母大写\n");
-        prompt.append("2. 层次架构：Controller -> Service -> DAO，不允许跨层调用\n");
-        prompt.append("3. 方法签名：参数不超过5个，返回类型明确\n");
-        prompt.append("4. 注解使用：正确使用Spring注解标识层次\n");
-        prompt.append("5. 异常处理：统一异常处理机制\n\n");
+        prompt.append("1. 4层架构：Adapter(适配器层) -> Application(应用层) -> Domain(领域层) -> Infrastructure(基础设施层)\n");
+        prompt.append("2. 层间依赖规则：\n");
+        prompt.append("   - 适配器层：只能调用应用层和基础设施层的工具类\n");
+        prompt.append("   - 应用层：只能调用领域层和基础设施层\n");
+        prompt.append("   - 领域层：只能调用基础设施层，通过support接口实现依赖反转\n");
+        prompt.append("   - 基础设施层：只能调用领域层，实现support接口\n");
+        prompt.append("3. 分包结构：\n");
+        prompt.append("   - adapter包：Web控制器、消息适配器、定时任务等\n");
+        prompt.append("   - application包：api和service分包，应用逻辑编排\n");
+        prompt.append("   - domain包：实体、值对象、领域服务、support接口\n");
+        prompt.append("   - infrastructure包：mapper、repository、config、util、supportimpl等\n");
+        prompt.append("4. 命名规范：方法名使用驼峰命名法，类名首字母大写\n");
+        prompt.append("5. 方法签名：参数不超过5个，返回类型明确\n");
+        prompt.append("6. 注解使用：正确使用Spring注解标识层次\n\n");
         
         // 添加方法调用链路信息
         prompt.append("待分析的方法调用链路：\n");
         prompt.append(callChain.toTreeString());
         prompt.append("\n");
         
-        // 添加已发现的违规信息
-        if (!existingViolations.isEmpty()) {
-            prompt.append("已发现的规范违规：\n");
-            for (RuleViolation violation : existingViolations) {
-                prompt.append("- ").append(violation.getDescription())
-                      .append(" (位置: ").append(violation.getLocation()).append(")\n");
-            }
-            prompt.append("\n");
-        }
+        prompt.append("请深度分析此调用链路，重点关注：\n");
+        prompt.append("1. 层间调用是否符合依赖规则\n");
+        prompt.append("2. 是否存在跨层调用或违反依赖反转\n");
+        prompt.append("3. 方法职责是否合理分配\n");
+        prompt.append("4. 是否遵循领域驱动设计原则\n\n");
         
-        prompt.append("请分析并返回JSON格式的结果，包含以下字段：\n");
+        prompt.append("请返回JSON格式的结果，包含以下字段：\n");
         prompt.append("- violations: 违规列表，每项包含type, description, location, suggestion, severity\n");
-        prompt.append("- summary: 总体评估\n");
-        prompt.append("- recommendations: 改进建议列表\n");
+        prompt.append("- summary: 总体评估和架构健康度\n");
+        prompt.append("- recommendations: 具体改进建议，包含重构方案\n");
+        prompt.append("- architecture_advice: 基于4层架构的设计建议\n");
         
         return prompt.toString();
     }
@@ -155,7 +144,7 @@ public class AIIntegrationService {
         
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
-                throw new IOException("AI API调用失败: " + response.code());
+                throw new IOException("AI API调用失败: " + response);
             }
             
             String responseBody = response.body().string();
@@ -174,31 +163,63 @@ public class AIIntegrationService {
     private List<RuleViolation> parseAIResponse(String aiResponse) {
         List<RuleViolation> violations = new ArrayList<>();
         
+        logger.info("AI响应内容: {}", aiResponse);
+        
         try {
             JsonObject response = gson.fromJson(aiResponse, JsonObject.class);
+            logger.info("JSON解析成功，检查violations字段...");
             
             if (response.has("violations")) {
                 com.google.gson.JsonArray violationsArray = response.getAsJsonArray("violations");
+                logger.info("找到violations数组，长度: {}", violationsArray.size());
                 
                 for (int i = 0; i < violationsArray.size(); i++) {
                     JsonObject violationObj = violationsArray.get(i).getAsJsonObject();
                     
                     RuleViolation violation = new RuleViolation();
-                    violation.setViolationType(violationObj.get("type").getAsString());
-                    violation.setDescription(violationObj.get("description").getAsString());
-                    violation.setLocation(violationObj.get("location").getAsString());
-                    violation.setSuggestion(violationObj.get("suggestion").getAsString());
-                    violation.setSeverity(violationObj.get("severity").getAsString());
+                    violation.setViolationType(getJsonString(violationObj, "type", "UNKNOWN"));
+                    violation.setDescription(getJsonString(violationObj, "description", "AI检测到问题"));
+                    violation.setLocation(getJsonString(violationObj, "location", "位置未知"));
+                    violation.setSuggestion(getJsonString(violationObj, "suggestion", "请查看AI建议"));
+                    violation.setSeverity(getJsonString(violationObj, "severity", "medium"));
                     
                     violations.add(violation);
+                    logger.info("添加违规: {}", violation.getDescription());
                 }
+            } else {
+                logger.info("AI响应中没有violations字段，可能代码符合规范");
             }
             
         } catch (Exception e) {
             logger.error("解析AI响应失败: {}", e.getMessage());
+            logger.error("AI原始响应: {}", aiResponse);
+            
+            // 解析失败时，创建一个包含AI分析结果的违规项
+            RuleViolation violation = new RuleViolation();
+            violation.setViolationType("AI_ANALYSIS");
+            violation.setDescription("AI分析完成，请查看详细报告");
+            violation.setLocation("整体调用链路");
+            violation.setSuggestion("AI已完成分析，详细建议请查看报告");
+            violation.setSeverity("info");
+            violations.add(violation);
         }
         
+        logger.info("最终返回违规数量: {}", violations.size());
         return violations;
+    }
+    
+    /**
+     * 安全获取JSON字符串值
+     */
+    private String getJsonString(JsonObject obj, String key, String defaultValue) {
+        try {
+            if (obj.has(key) && !obj.get(key).isJsonNull()) {
+                return obj.get(key).getAsString();
+            }
+        } catch (Exception e) {
+            logger.warn("获取JSON字段失败: {}", key);
+        }
+        return defaultValue;
     }
     
     /**

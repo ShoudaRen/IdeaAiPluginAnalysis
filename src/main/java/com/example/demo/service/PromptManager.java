@@ -87,7 +87,11 @@ public class PromptManager {
                     break;
                 case "layer":
                 case "layer_violation":
-                    relevantRules.add("2. 层次架构：Controller -> Service -> DAO，不允许跨层调用");
+                    relevantRules.add("2. 4层架构：Adapter(适配器) -> Application(应用) -> Domain(领域) -> Infrastructure(基础设施)");
+                    relevantRules.add("   - 适配器层：只能调用应用层和基础设施层工具类");
+                    relevantRules.add("   - 应用层：只能调用领域层和基础设施层");
+                    relevantRules.add("   - 领域层：通过support接口调用基础设施层");
+                    relevantRules.add("   - 基础设施层：实现领域层support接口");
                     break;
                 case "signature":
                 case "signature_violation":
@@ -105,7 +109,7 @@ public class PromptManager {
         // 如果没有特定违规类型，添加基础规范
         if (relevantRules.isEmpty()) {
             relevantRules.add("1. 命名规范：方法名使用驼峰命名法，类名首字母大写");
-            relevantRules.add("2. 层次架构：Controller -> Service -> DAO");
+            relevantRules.add("2. 4层架构：Adapter -> Application -> Domain -> Infrastructure");
             relevantRules.add("3. 方法签名：参数不超过5个，返回类型明确");
         }
         
@@ -193,7 +197,7 @@ public class PromptManager {
      */
     private void loadDefaultRuleFragments(Map<String, String> fragments) {
         fragments.put("naming", "命名规范：方法名使用驼峰命名法，类名首字母大写，常量全大写");
-        fragments.put("layer", "层次架构：Controller -> Service -> DAO，不允许跨层调用");
+        fragments.put("layer", "4层架构：Adapter(适配器) -> Application(应用) -> Domain(领域) -> Infrastructure(基础设施)，严格遵循层间依赖规则");
         fragments.put("signature", "方法签名：参数不超过5个，返回类型明确");
         fragments.put("annotation", "注解使用：正确使用Spring注解标识层次");
         fragments.put("exception", "异常处理：统一异常处理机制");
@@ -247,7 +251,7 @@ public class PromptManager {
             case "naming":
                 return "命名规范：方法名使用驼峰命名法，类名首字母大写，常量全大写";
             case "layer":
-                return "层次架构：Controller -> Service -> DAO，不允许跨层调用";
+                return "4层架构：Adapter(适配器) -> Application(应用) -> Domain(领域) -> Infrastructure(基础设施)，严格遵循层间依赖规则";
             case "signature":
                 return "方法签名：参数不超过5个，返回类型明确";
             case "annotation":
